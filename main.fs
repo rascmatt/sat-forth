@@ -311,13 +311,13 @@
   THEN
 
   \ case 2: li appears in c1 only with the opposite sign -> negate li to guarantee it occurs in c1
-  -2 = IF li negate ELSE li THEN { li }
+  -2 = IF li negate ELSE li THEN { li_n } \ Give a new name so we don't get the 'redefinition' warning
 
   \ Then, assert that -li appears in c2 with the right sign
   c2_addr get-clause  ( li .. lm m )
   0                   
   swap 0 u+do         ( li .. ln i )
-    swap negate li = IF drop -1 THEN
+    swap negate li_n = IF drop -1 THEN
   loop ( i )
 
   \ case 3: -li does not appear in c2 at all -> just combine clauses and factor
@@ -339,12 +339,12 @@
   0 \ Put a counter on the stack
   begin                   ( 0 l_c2 .. l_cm i )
     swap dup 0<> while    ( 0 l_c2 .. i l_cm )
-    dup li negate <> IF >r 1+ ELSE drop THEN
+    dup li_n negate <> IF >r 1+ ELSE drop THEN
   repeat
   drop \ Drop the first marker
   begin                   ( 0 l_c2 .. l_cn i )
     swap dup 0<> while    ( 0 l_c2 .. i l_cn )
-    dup li <> IF >r 1+ ELSE drop THEN
+    dup li_n <> IF >r 1+ ELSE drop THEN
   repeat
   drop \ Drop the second marker
 
@@ -456,7 +456,7 @@
       a_addr decide ( .. dl b )
       0= IF \ All variables are assigned: Satisfying assignment found.
         \ TODO: enable to print one satisfying assignment
-        \ a_addr print-assignment
+        a_addr print-assignment
         \ Clean up stack and exit
         a_addr drop-implication-graph
         true exit
