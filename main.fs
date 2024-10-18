@@ -455,7 +455,8 @@
     ELSE ( .. dl )  \ BCP terminated without conflict: Make a new decision.
       a_addr decide ( .. dl b )
       0= IF \ All variables are assigned: Satisfying assignment found.
-        a_addr print-assignment
+        \ TODO: enable to print one satisfying assignment
+        \ a_addr print-assignment
         \ Clean up stack and exit
         a_addr drop-implication-graph
         true exit
