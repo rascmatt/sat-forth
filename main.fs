@@ -1,8 +1,9 @@
 : create-clause ( l1 .. ln n -- addr )
-  \ Write a clause of n literals in the format (n, l1, .., ln) to memory (in reverse order) and return the addresss
+  \ Write a clause of n literals in the format (n, l1, .., ln, n_addr) to memory (in reverse order) and return the addresss
   
   align here over   ( l1 .. ln n addr n)
-  1+ cells allot swap ( l1 .. ln addr n )
+  \ Already reserve enough memory for the start element (length) and the trailing link to the next clause in a list
+  2 + cells allot swap ( l1 .. ln addr n )
   2dup swap !       ( l1 .. ln addr n )  \ The first value is the length of the clause
   swap cell + swap  ( l1 .. ln addr+1 n )
   0 u+do
@@ -10,6 +11,11 @@
     i cells + !
   loop
   cell - \ Return the original address, including the length of the clause
+  ( c_addr )
+  
+  \ Initialize the trailing link with -1
+  dup @ 1+ cells over + ( c_addr n_addr )
+  -1 swap !             ( c_addr )
 ;
 
 : create-clause-list ( 0 li1 .. lin 0 lj1 .. ljm c_n -- addr )
@@ -35,23 +41,28 @@
     drop        \ Drop the loop counter
                 ( 0 li1 .. lin lj1 .. ljm m )
     create-clause  ( 0 li1 .. lin j_addr )
-    r>          ( 0 li1 .. lin j_addr n_addr )
-    align here cell allot ( j_addr n_addr addr )
-    !                     ( j_addr )
-  loop
-;
 
-: append-clause-list ( li1 .. lin n l_addr -- l_addr )
-  \ Append a new clause to the clause list at l_addr. Return the new head of the list.
-  >r
-  create-clause            ( i_addr )
-  align here cell allot ( i_addr addr )
-  r> swap               ( i_addr l_addr addr )
-  !                     ( i_addr )
+    dup @ 1+ cells over + ( 0 li1 .. lin j_addr n_addr )
+    r> swap !             ( 0 li1 .. lin j_addr )
+  loop
 ;
 
 : next-clause ( addr -- addr )
   dup @ 1+ cells + @
+;
+
+: append-clause-list ( l_addr c_addr -- )
+  \ Append a new clause c to the end of the list l
+  swap          ( c_addr l_addr )
+  dup next-clause   ( c_addr l_addr l+1_addr )
+  begin         ( c_addr l_addr l+1_addr )
+    dup -1 <> while ( c_addr l_addr l+1_addr )
+    swap drop dup   ( c_addr l+1_addr l+1_addr )
+    next-clause     ( c_addr l+1_addr l+2_addr )
+  repeat        ( c_addr l_addr l+1_addr )
+  drop          ( c_addr l_addr )
+  dup @ ( c_addr l_addr n ) 1+ cells ( c_addr l_addr n ) swap ( c_addr n l_addr ) +  ( c_addr ln_addr )
+  !             ( )
 ;
 
 : get-clause ( addr -- li1 .. lin n )
@@ -137,7 +148,13 @@
 
     dup lit-sign        ( a_addr l_addr u-li a ) \ The new assignment a is 0 if the literal appears negatively, else 1
     swap abs cells      ( a_addr l_addr a offset )
-    fourth + !          ( a_addr l_addr )
+    fourth +            ( a_addr l_addr a o_addr )
+
+    \ Write current decision level to lookup table for assigned variable
+    dup 4 pick @ 1+ cells + ( a_addr l_addr a o_addr dl_addr )
+    5 pick swap !           ( a_addr l_addr a o_addr )
+
+    !                       ( a_addr l_addr ) \ Assign the variable
   repeat
   drop drop drop drop true
 ;
@@ -151,8 +168,10 @@
   a_addr @ 0 u+do
     a_addr i 1+ cells +  ( r addr )
     dup @ 0< IF          ( r addr )
-      1 swap ! drop true ( r )
-      i 1+ dl 1+ rot -1 swap ( li dl -1 r ) \ Grow the implication graph
+      dup 0 swap !                     ( r addr )  \ Assign the new value
+      a_addr @ 1+ cells + dl 1+ swap ! ( r )       \ Put the decison level for the current variable to the lookup table
+      i 1+ negate dl 1+ rot -1 swap ( li dl -1 r ) \ Grow the implication graph
+      drop true
       leave ( r )
     THEN
     drop ( r )
@@ -162,15 +181,190 @@
   swap   ( dl r )
 ;
 
+: backtrack ( i1 .. in dl t_dl -- i1 .. ij t_dl )
+  \ Backtrack to the specified target decision level
+  swap drop ( i1 .. in t_dl )
+  begin     ( li dl c t_dl )
+    dup fourth swap > WHILE ( li dl c t_dl)
+      >r
+      \ TODO: clear the decision table lookup as well
+      drop drop drop
+      r>
+  repeat
+;
+
 : drop-imp-graph ( i1 .. in dl -- )
   \ Drop all elemnts of the implication graph
-  drop
-  begin  ( li dl c )
-    2dup >r >r third r> r> ( li dl c li dl c )
-    -1 = -rot -1 = -rot -1 = and and 0= WHILE
-      drop drop drop
+  -1 backtrack    \ Batrack to the root node
+  drop            \ Drop the decision level dl
+  drop drop drop  \ Drop the root node
+;
+
+: sort { addr u -- }
+  \ Bubble sort the array in ascending order
+
+  \ Base case: if u <= 1, the array is already sorted
+  u 1 <= IF EXIT THEN
+
+  \ Outer loop: repeat u-1 times
+  u 1 u+do
+    \ Inner loop: compare and swap adjacent elements
+    u i - 0 DO
+      
+      \ Get the addresses of two adjacent elements
+      addr i cells + @            \ Get the I-th element
+      addr i 1+ cells + @         \ Get the (I+1)-th element
+
+      \ Compare them
+      2dup > IF                   \ If element I > element I+1
+        \ Swap the elements
+        addr i cells + !          \ Store the (I+1)-th element in the I-th position
+        addr i 1+ cells + !       \ Store the I-th element in the (I+1)-th position
+      ELSE
+        2DROP                       \ Drop the compared values
+      THEN
+    loop
+  loop
+;
+
+: factor { c_addr -- f_addr }
+  \ Apply the factoring rule i.e. deduplicate occurences of the same literals
+
+  \ Sort the literals in the clause in ascending order
+  c_addr @ ( n )
+  c_addr cell + swap sort
+  c_addr get-clause  ( li .. ln n )
+  { n }
+  0 >r        \ Push a marker on the return stack
+  0 0         ( li .. ln p i )
+  begin
+    dup n < while ( li .. ln p i )
+    -rot          ( li .. i ln p )
+    2dup = IF drop swap ELSE
+      drop dup >r swap
+    THEN ( li .. ln p i )
+    1+
+  repeat ( li .. ln p i )
+  drop drop ( )
+  
+  r> 0      ( ln i )
+  begin
+    over 0<> while ( li .. lj i )
+      r> swap 1+
+  repeat    ( li .. lm 0 m )
+  swap drop \ Drop the marker
+  ( li .. lm m )
+  create-clause
+;
+
+: resolve { c1_addr c2_addr li -- c3_addr }
+  \ Apply the resolution rule with pivot element li
+
+  \ First, assert that li appears in c1 with the same sign.
+  c1_addr get-clause  ( li .. ln n )
+  0                   
+  swap 0 u+do         ( li .. ln i )
+    swap dup li = IF    ( li .. i ln )
+      drop drop -1      ( li .. i )
+    ELSE
+      negate li =       ( li .. i b )
+      over -1 <> and    ( li .. i b )
+      IF drop -2 THEN   ( li .. i ) \ Only set to -2 if we've not already set it to -1
+    THEN ( li .. i )
+  loop ( i )
+
+  \ case 1: li does not appear in c1 at all -> just combine clauses and factor
+  dup 0= IF 
+    drop \ drop the indicator
+    c1_addr get-clause
+    >r
+    c2_addr get-clause r> +
+    create-clause
+    factor exit
+  THEN
+
+  \ case 2: li appears in c1 only with the opposite sign -> negate li to guarantee it occurs in c1
+  -2 = IF li negate ELSE li THEN { li }
+
+  \ Then, assert that -li appears in c2 with the right sign
+  c2_addr get-clause  ( li .. lm m )
+  0                   
+  swap 0 u+do         ( li .. ln i )
+    swap negate li = IF drop -1 THEN
+  loop ( i )
+
+  \ case 3: -li does not appear in c2 at all -> just combine clauses and factor
+  0= IF 
+    c1_addr get-clause
+    >r
+    c2_addr get-clause r> +
+    create-clause
+    factor exit
+  THEN
+
+  \ Here we can be sure that li occurs in c1 and -li occurs in c2
+
+  0 \ Put a marker on the stack
+  c1_addr get-clause drop ( 0 l_c1 .. l_cn )
+  0 \ Another marker
+  c2_addr get-clause drop ( 0 l_c1 .. l_cn 0 lc2 .. l_cm )
+  
+  0 \ Put a counter on the stack
+  begin                   ( 0 l_c2 .. l_cm i )
+    swap dup 0<> while    ( 0 l_c2 .. i l_cm )
+    dup li negate <> IF >r 1+ ELSE drop THEN
   repeat
-  drop drop drop
+  drop \ Drop the first marker
+  begin                   ( 0 l_c2 .. l_cn i )
+    swap dup 0<> while    ( 0 l_c2 .. i l_cn )
+    dup li <> IF >r 1+ ELSE drop THEN
+  repeat
+  drop \ Drop the second marker
+
+  { n } \ Length of new clause
+  n
+  begin
+    1- dup 0 >= while
+    r> swap
+  repeat ( li .. ln 0 )
+  drop n ( li .. ln n )
+  create-clause
+  factor
+;
+
+: is-asserting { dl a_addr c_addr -- b }
+  \ Check if there the clause c is asserting, i.e. it has only one literal
+  \ from the current decision level
+  a_addr dup @ 1+ cells + { dl_addr }
+  c_addr get-clause  ( l1 .. ln n )
+  0 swap      ( l1 .. ln i n )
+  0 u+do      ( l1 .. ln i )
+    swap      ( l1 .. ln-1 i ln )
+    abs cells dl_addr + @  ( l1 .. ln-1 i dl-n )
+    dl = IF 1+ THEN
+  loop ( i )
+  1 =
+;
+
+: resolve-conflict { dl a_addr l_addr -- .. dl }
+  \ Resolve the conflict by learning a clause and backtracking to the right level
+  a_addr l_addr bcp-next ( .. c_addr s )
+  2 <> IF ." Expected an unsatisfied clause" -1 throw THEN
+  begin               ( c_addr )
+    dup dl a_addr rot ( c_addr dl a_addr c_addr )
+    is-asserting 0= while ( [ li dl cl ] c_addr )
+      \ TODO: also undo the decision in the lookup map
+      >r                  ( [ li dl cl ] )
+      swap drop swap      ( cl li )
+      r>                  ( cl li c_addr )
+      -rot                ( c_addr cl li )
+      resolve             ( r_addr )
+  repeat ( c_addr )
+  l_addr over         ( c_addr l_addr c_addr )
+  append-clause-list  ( c_addr )
+  ." learned clause " .
+  \ TODO: (1) backtrack to the second highest decision level in the learned clause
+  dl
 ;
 
 : is-sat { a_addr l_addr -- b }
@@ -178,13 +372,15 @@
   -1 -1 -1  \ Initialize the root of the implication graph
   0 ( dl ) \ Initialize the decision level with 0
   begin
-    a_addr l_addr bcp  ( dl b )
+    a_addr l_addr bcp  ( ..  dl b )
     0= IF
-      \ TODO: learn a clause and backtrack. For now we just return false, i.e. unsat
+      a_addr l_addr resolve-conflict ( .. dl )
+      
+      \ TODO: continue instead of exit, but skip the decision
       drop-imp-graph
-      false
-    THEN ( dl )
-    a_addr decide ( dl b )
+      false exit
+    THEN ( .. dl )
+    a_addr decide ( .. dl b )
     0= IF \ No conflict, and no free variables left -> Found a satisfying assignment
       drop-imp-graph
       true exit
