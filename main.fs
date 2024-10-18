@@ -181,21 +181,48 @@
   swap   ( dl r )
 ;
 
-: backtrack ( i1 .. in dl t_dl -- i1 .. ij t_dl )
-  \ Backtrack to the specified target decision level
-  swap drop ( i1 .. in t_dl )
-  begin     ( li dl c t_dl )
-    dup fourth swap > WHILE ( li dl c t_dl)
-      >r
-      \ TODO: clear the decision table lookup as well
-      drop drop drop
-      r>
-  repeat
+: drop-decision ( [ li dl c_addr ] a_addr -- )
+  \ Drop a decision node on the implication graph. This also
+  \ cleans removes the assignment and deletes the decision level
+  \ from the lookup table
+
+  \ Decision level -1 indicates the implication graph root. Nothing
+  \ to delete from the lookup table.
+  third -1 = IF drop drop drop drop THEN
+
+  \ Remove the assignment
+  fourth abs cells    ( li dl c_addr a_addr a_offs )
+  over + -1 swap !    ( li dl c_addr a_addr )
+
+  \ Remove the dl from the lookup table
+  dup @ 1+ cells +    ( li dl c_addr dl_root )
+  fourth abs cells +  ( li dl c_addr dl_addr )
+  -1 swap !           ( li dl c_addr )
+
+  \ Drop the implication graph element
+  drop drop drop
 ;
 
-: drop-imp-graph ( i1 .. in dl -- )
+: backtrack ( i1 .. in dl a_addr t_dl -- i1 .. ij t_dl )
+  \ Backtrack to the specified target decision level
+  
+  rot drop  ( i1 .. in a_addr t_dl )
+  swap >r   ( li dl c t_dl )
+  begin     ( li dl c t_dl )
+    dup fourth swap > WHILE ( li dl c t_dl )
+      r@        ( li dl c t_d a_addr )
+      swap >r   ( li dl c a_addr )
+      drop-decision
+      r>        ( t_d )
+  repeat
+  r>            ( t_d a_addr )
+  drop          ( t_d )
+;
+
+: drop-implication-graph ( i1 .. in dl a_addr -- )
   \ Drop all elemnts of the implication graph
-  -1 backtrack    \ Batrack to the root node
+  -1              ( i1 .. in dl a_addr -1 )
+  backtrack       ( [-1, -1, -1] -1 )
   drop            \ Drop the decision level dl
   drop drop drop  \ Drop the root node
 ;
@@ -346,6 +373,37 @@
   1 =
 ;
 
+: get-backtrack-dl { a_addr c_addr dl -- n_dl }
+  \ Determine the dl to backtrack to based on the current dl and the
+  \ learned clause c. This implementation returns the second-highest
+  \ dl in the clause (or the one previous to the only present dl ).
+
+  c_addr get-clause  ( li .. ln n )
+  
+  dup 0<= IF ." Expected the learned clause to have at least one literal." -1 throw THEN
+
+  a_addr dup @ 1+ cells + { dl_addr }
+  
+  \ Remember the biggest and second biggest encountered dl
+  -1 -1 rot    ( li .. ln b sb n )
+  0 u+do       ( li .. ln b sb )
+    rot        ( li .. b sb ln )
+    abs cells dl_addr + @ ( li .. b sb dl_n )
+    dup fourth > IF \ The new dl is bigger than the previous biggest
+      -rot drop   ( li .. dl_n b )
+    ELSE
+      dup third > IF \ The new dl is bigger than the previous second-biggest
+        swap drop ( li .. b dl_n )
+      ELSE drop   ( li .. b sb )
+      THEN
+    THEN
+  loop ( b sb )
+  
+  over -1 = IF ." Expected the biggest decision level in a clause to be >= 0. " -1 throw THEN
+  dup  -1 = IF drop 1- exit THEN
+  swap drop
+;
+
 : resolve-conflict { dl a_addr l_addr -- .. dl }
   \ Resolve the conflict by learning a clause and backtracking to the right level
   a_addr l_addr bcp-next ( .. c_addr s )
@@ -353,18 +411,32 @@
   begin               ( c_addr )
     dup dl a_addr rot ( c_addr dl a_addr c_addr )
     is-asserting 0= while ( [ li dl cl ] c_addr )
-      \ TODO: also undo the decision in the lookup map
-      >r                  ( [ li dl cl ] )
-      swap drop swap      ( cl li )
-      r>                  ( cl li c_addr )
-      -rot                ( c_addr cl li )
-      resolve             ( r_addr )
+      >r                    ( [ li dl cl ] | c_addr )
+      third >r dup >r       ( [ li dl cl ] | c_addr li cl )
+      a_addr drop-decision  ( | c_addr li cl )
+      r> r> r>              ( cl li c_addr )
+      -rot                  ( c_addr cl li )
+      resolve               ( r_addr )
   repeat ( c_addr )
   l_addr over         ( c_addr l_addr c_addr )
   append-clause-list  ( c_addr )
-  ." learned clause " .
-  \ TODO: (1) backtrack to the second highest decision level in the learned clause
-  dl
+  dl a_addr -rot      ( a_addr c_addr dl )
+  get-backtrack-dl    ( new_dl )
+  dl a_addr rot       ( .. old_dl a_addr new_dl )
+  backtrack           ( .. new_dl )
+;
+
+: print-assignment { a_addr -- }
+  \ Print the (partial) variable assignment
+  a_addr @  ( n )
+  0 u+do    ( )
+    i 1+    { li }
+    a_addr li cells + @ ( a )
+    dup -1 <> IF        ( a )
+      li swap 0= IF negate THEN
+      ." " . \ print the literal
+    ELSE drop THEN
+  loop
 ;
 
 : is-sat { a_addr l_addr -- b }
@@ -375,15 +447,19 @@
     a_addr l_addr bcp  ( ..  dl b )
     0= IF
       a_addr l_addr resolve-conflict ( .. dl )
-      
-      \ TODO: continue instead of exit, but skip the decision
-      drop-imp-graph
-      false exit
-    THEN ( .. dl )
-    a_addr decide ( .. dl b )
-    0= IF \ No conflict, and no free variables left -> Found a satisfying assignment
-      drop-imp-graph
-      true exit
+      dup -1 = IF \ Backtracked to dl -1: Formula is unsatisfiable
+        \ Clean up stack and exit
+        a_addr drop-implication-graph
+        false exit
+      THEN
+    ELSE ( .. dl )  \ BCP terminated without conflict: Make a new decision.
+      a_addr decide ( .. dl b )
+      0= IF \ All variables are assigned: Satisfying assignment found.
+        a_addr print-assignment
+        \ Clean up stack and exit
+        a_addr drop-implication-graph
+        true exit
+      THEN
     THEN
   again
 ;
