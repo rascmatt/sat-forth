@@ -1,4 +1,5 @@
 require utils.fs
+require dimacs.fs
 
 : test ( 0 li .. ln 0 lj .. lm cn vn b -- )
   \ test the list of clauses and assert the expected result
@@ -7,46 +8,16 @@ require utils.fs
   dup expected <> IF ." Expected " expected . ." but was " . ELSE drop THEN
 ;
 
-\ Example 1
+s" ./dimacs/t1.cnf" parse-dimacs
+true test
 
-0 1 2
-0 1 3
-0 -2 -3 
-3 3 true test
+s" ./dimacs/t2.cnf" parse-dimacs
+true test
 
-\ Example 2
+s" ./dimacs/t3.cnf" parse-dimacs
+true test
 
-0 1 2 
-0 1 3 
-0 -2 -3 
-0 -1 2 3
+s" ./dimacs/t3.cnf" parse-dimacs
+false test
 
-4 3 true test
 
-\ Example 3
-
-0 1 2 
-0 1 3 
-0 -2 -3 
-0 -1 2 3
-0 -1 2 -3
-
-5 3 true test
-
-\ Example 4
-
-0 1 2 
-0 1 3 
-0 -2 -3 
-0 -1 2 3
-0 -1 2 -3
-0 -1 -2 3
-
-6 3 false test
-
-\ Example 5
-
-0 1 -2
-0 -1 2
-
-2 2 true test

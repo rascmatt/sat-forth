@@ -65,6 +65,16 @@
   !             ( )
 ;
 
+: get-clause-list-length ( l_addr -- n )
+    0 swap \ Initialize counter
+    begin               ( i l_addr )
+        dup -1 > WHILE ( i l_addr )
+            dup @ 1+ cells + @
+            swap 1+ swap
+    repeat ( i -1 )
+    drop
+;
+
 : get-clause ( addr -- li1 .. lin n )
   dup @ >r
   r@ 0 u+do
