@@ -1,9 +1,36 @@
+: sort { addr u -- }
+  \ Bubble sort the array in ascending order
+
+  \ Base case: if u <= 1, the array is already sorted
+  u 1 <= IF EXIT THEN
+
+  \ Outer loop: repeat u-1 times
+  u 1 u+do
+    \ Inner loop: compare and swap adjacent elements
+    u i - 0 DO
+      
+      \ Get the addresses of two adjacent elements
+      addr i cells + @            \ Get the I-th element
+      addr i 1+ cells + @         \ Get the (I+1)-th element
+
+      \ Compare them
+      2dup > IF                   \ If element I > element I+1
+        \ Swap the elements
+        addr i cells + !          \ Store the (I+1)-th element in the I-th position
+        addr i 1+ cells + !       \ Store the I-th element in the (I+1)-th position
+      ELSE
+        2DROP                       \ Drop the compared values
+      THEN
+    loop
+  loop
+;
+
 : create-clause ( l1 .. ln n -- addr )
   \ Write a clause of n literals in the format (n, l1, .., ln, n_addr) to memory (in reverse order) and return the addresss
   
-  align here over   ( l1 .. ln n addr n)
+  dup   ( l1 .. ln n n)
   \ Already reserve enough memory for the start element (length) and the trailing link to the next clause in a list
-  2 + cells allot swap ( l1 .. ln addr n )
+  2 + cells allocate throw swap ( l1 .. ln addr n )
   2dup swap !       ( l1 .. ln addr n )  \ The first value is the length of the clause
   swap cell + swap  ( l1 .. ln addr+1 n )
   0 u+do
@@ -16,6 +43,22 @@
   \ Initialize the trailing link with -1
   dup @ 1+ cells over + ( c_addr n_addr )
   -1 swap !             ( c_addr )
+;
+
+: free-clause ( addr -- )
+  \ Free the memory reserved by this clause
+  free throw
+;
+
+: free-list ( l_addr -- )
+  \ Free the memory reserved by the clause list
+  begin              ( l_addr )
+      dup -1 > WHILE ( l_addr )
+          dup                 ( l_addr l_addr )
+          dup @ 1+ cells + @  ( l_addr l+1_addr )
+          swap free-clause    ( l+1_addr )
+  repeat ( -1 )
+  drop
 ;
 
 : create-clause-list ( 0 li1 .. lin 0 lj1 .. ljm c_n -- addr )
@@ -51,18 +94,51 @@
   dup @ 1+ cells + @
 ;
 
-: append-clause-list ( l_addr c_addr -- )
-  \ Append a new clause c to the end of the list l
+: is-equal-clause { c1_addr c2_addr -- b }
+  \ Two clauses are equal if they contain the same number of literals
+  \ and the literals are the same.
+
+  c1_addr -1 = c2_addr -1 = xor IF false THEN
+  c1_addr -1 = c2_addr -1 = and IF true THEN
+
+  c1_addr @ ( n )
+  c2_addr @ ( n m )
+  <> IF false exit THEN
+
+  \ Sort the literals in ascending order
+  c1_addr cell+ c1_addr @ sort
+  c2_addr cell+ c2_addr @ sort
+
+  true    ( s )
+  c1_addr @ 0 u+do   ( s )
+    i 1+ cells       ( s o )
+    c1_addr over + @ ( s o li_a )
+    swap             ( s li_a o )
+    c2_addr swap + @ ( s li_a li_b )
+    <> IF drop false leave THEN ( s )
+  loop ( s )
+;
+
+: append-clause-set ( l_addr c_addr -- c_addr )
+  \ Append a new clause c to the end of the list l if l does not
+  \ yet contain an identical clause. Returns either the address of the added
+  \ clause of the identical clause that is already in the set.
   swap          ( c_addr l_addr )
   dup next-clause   ( c_addr l_addr l+1_addr )
   begin         ( c_addr l_addr l+1_addr )
+    third third ( c_addr l_addr l+1_addr c_addr l_addr )
+    is-equal-clause  IF ( c_addr l_addr l+1_addr ) \ The clause is already part of the set: Stop and return
+      drop swap drop    ( l_addr )
+      exit
+    THEN
     dup -1 <> while ( c_addr l_addr l+1_addr )
     swap drop dup   ( c_addr l+1_addr l+1_addr )
     next-clause     ( c_addr l+1_addr l+2_addr )
   repeat        ( c_addr l_addr l+1_addr )
   drop          ( c_addr l_addr )
-  dup @ ( c_addr l_addr n ) 1+ cells ( c_addr l_addr n ) swap ( c_addr n l_addr ) +  ( c_addr ln_addr )
-  !             ( )
+  over -rot     ( c_addr c_addr l_addr )
+  dup @ 1+ cells swap +  ( c_addr c_addr ln_addr )
+  !             ( c_addr )
 ;
 
 : get-clause-list-length ( l_addr -- n )
@@ -173,28 +249,61 @@
   \ Make a new decision, adapt the current assignment accordingly and append the implication graph
   \ with a new decision level. 
   \ Returns true if a new assignment was made, otherwise false, i.e. there is already a complete assignment.
-  \ This implementation naively assigns the next free variable to 1
-  false                  ( r )
-  a_addr @ 0 u+do
-    a_addr i 1+ cells +  ( r addr )
-    dup @ 0< IF          ( r addr )
-      dup 0 swap !                     ( r addr )  \ Assign the new value
-      a_addr @ 1+ cells + dl 1+ swap ! ( r )       \ Put the decison level for the current variable to the lookup table
-      i 1+ negate dl 1+ rot -1 swap ( li dl -1 r ) \ Grow the implication graph
-      drop true
-      leave ( r )
-    THEN
-    drop ( r )
-  loop
-  dl     ( r dl )
-  over IF 1+ THEN \ Make sure we increase the decision level if we've made a decision
-  swap   ( dl r )
+  \ This implementation naively assigns the next free variable to a random truth value
+
+  \ Randomize the choice of the sign
+  utime drop 2 mod { sign }
+
+  \ Randomize the choice of the free variable to assign:
+  \ (0) Run through variables and push all free variables on stack
+  \ (1) Pick a random one to assign
+  \ (2) Pop the list of variables from the stack and only assign the chosen one
+  
+  0                ( f_n ) 
+  a_addr @ 0 u+do  ( f_n )
+    i 1+           ( f_n a )
+    dup cells a_addr + @ 0< IF ( f_n a )
+      swap 1+                  ( a f_n )
+    ELSE drop THEN             ( f_n )
+  loop ( a1 .. an n )
+
+  dup 0<= IF \ No more free variables
+    drop dl false exit
+  THEN
+
+  ( a1 .. an n )
+
+  \ Pick a random index in [0; n)
+  dup utime drop swap mod { idx }
+  
+  \ Prepare a variable to store the chosen literal
+  cell allocate throw { a }
+
+  ( a1 .. an n )
+  0 u+do ( a1 .. an )
+    idx i = IF  ( a_i )
+      a !       ( )
+    ELSE drop THEN
+  loop  ( )
+
+  a @                     ( a )
+  dup cells a_addr +      ( a addr )
+  sign swap !             ( a ) \ Assign the new value
+  a_addr dup @ 1+ cells + ( a dl_addr )
+  over cells +            ( a ld_a_addr)
+  dl 1+ swap !            ( a ) \ Put the decision level to the lookup table
+  sign 0= IF negate THEN  ( li )
+  dl 1+ -1                ( li dl -1 ) \ Grow the implication graph
+
+  a free throw            \ Free the variable
+
+  dl 1+ true              ( .. dl b )
 ;
 
 : drop-decision ( [ li dl c_addr ] a_addr -- )
   \ Drop a decision node on the implication graph. This also
-  \ cleans removes the assignment and deletes the decision level
-  \ from the lookup table
+  \ removes the assignment and deletes the decision level from
+  \ the lookup table
 
   \ Decision level -1 indicates the implication graph root. Nothing
   \ to delete from the lookup table.
@@ -235,33 +344,6 @@
   backtrack       ( [-1, -1, -1] -1 )
   drop            \ Drop the decision level dl
   drop drop drop  \ Drop the root node
-;
-
-: sort { addr u -- }
-  \ Bubble sort the array in ascending order
-
-  \ Base case: if u <= 1, the array is already sorted
-  u 1 <= IF EXIT THEN
-
-  \ Outer loop: repeat u-1 times
-  u 1 u+do
-    \ Inner loop: compare and swap adjacent elements
-    u i - 0 DO
-      
-      \ Get the addresses of two adjacent elements
-      addr i cells + @            \ Get the I-th element
-      addr i 1+ cells + @         \ Get the (I+1)-th element
-
-      \ Compare them
-      2dup > IF                   \ If element I > element I+1
-        \ Swap the elements
-        addr i cells + !          \ Store the (I+1)-th element in the I-th position
-        addr i 1+ cells + !       \ Store the I-th element in the (I+1)-th position
-      ELSE
-        2DROP                       \ Drop the compared values
-      THEN
-    loop
-  loop
 ;
 
 : factor { c_addr -- f_addr }
@@ -316,8 +398,10 @@
     c1_addr get-clause
     >r
     c2_addr get-clause r> +
-    create-clause
-    factor exit
+    create-clause       ( c3_addr ) \ Produce an intermediary clause, which we can free after factoring
+    dup factor          ( c3_addr c4_addr )
+    swap free-clause    ( c4_addr )
+    exit
   THEN
 
   \ case 2: li appears in c1 only with the opposite sign -> negate li to guarantee it occurs in c1
@@ -335,8 +419,10 @@
     c1_addr get-clause
     >r
     c2_addr get-clause r> +
-    create-clause
-    factor exit
+    create-clause       ( c3_addr ) \ Produce an intermediary clause, which we can free after factoring
+    dup factor          ( c3_addr c4_addr )
+    swap free-clause    ( c4_addr )
+    exit
   THEN
 
   \ Here we can be sure that li occurs in c1 and -li occurs in c2
@@ -365,8 +451,9 @@
     r> swap
   repeat ( li .. ln 0 )
   drop n ( li .. ln n )
-  create-clause
-  factor
+  create-clause       ( c3_addr ) \ Produce an intermediary clause, which we can free after factoring
+  dup factor          ( c3_addr c4_addr )
+  swap free-clause    ( c4_addr )
 ;
 
 : is-asserting { dl a_addr c_addr -- b }
@@ -418,6 +505,10 @@
   \ Resolve the conflict by learning a clause and backtracking to the right level
   a_addr l_addr bcp-next ( .. c_addr s )
   2 <> IF ." Expected an unsatisfied clause" -1 throw THEN
+  
+  \ Initialize a boolean variable to indicate that we constructed a new clause, which can potentially be freed
+  cell allocate throw { is_new } false is_new !
+  
   begin               ( c_addr )
     dup dl a_addr rot ( c_addr dl a_addr c_addr )
     is-asserting 0= while ( [ li dl cl ] c_addr )
@@ -426,12 +517,24 @@
       a_addr drop-decision  ( | c_addr li cl )
       r> r> r>              ( cl li c_addr )
       -rot                  ( c_addr cl li )
-      resolve               ( r_addr )
+      third -rot            ( c_addr c_addr cl li )
+      resolve               ( c_addr r_addr )
+
+      \ If the current c_addr is an intermediary result, we need to free it
+      swap                  ( r_addr c_addr )
+      is_new @ IF free-clause  ELSE drop THEN ( r_addr )
+      true is_new !         ( r_addr )
+
   repeat ( c_addr )
-  l_addr over         ( c_addr l_addr c_addr )
-  append-clause-list  ( c_addr )
+
+  \ free the is_new variable
+  is_new free throw
+
+  l_addr swap         ( l_addr c_addr )  \ This may return an existing element in the list
+  append-clause-set   ( c_addr )
+
   dl a_addr -rot      ( a_addr c_addr dl )
-  get-backtrack-dl    ( new_dl )
+  get-backtrack-dl    ( new_dl )  
   dl a_addr rot       ( .. old_dl a_addr new_dl )
   backtrack           ( .. new_dl )
 ;
@@ -451,12 +554,23 @@
 
 : is-sat { a_addr l_addr -- b }
   \ Checks whether clause set given by l_addr is satisfiable. If so, a_addr contains the model
+
+  align here cell allot { iteration } 0 iteration !
+
   -1 -1 -1  \ Initialize the root of the implication graph
   0 ( dl ) \ Initialize the decision level with 0
   begin
+
+    \ Initiate restart after some iteractions without success
+    iteration @ 100 mod 0= IF
+      a_addr -1 backtrack
+      drop 0
+    THEN
+
     a_addr l_addr bcp  ( ..  dl b )
     0= IF
       a_addr l_addr resolve-conflict ( .. dl )
+
       dup -1 = IF \ Backtracked to dl -1: Formula is unsatisfiable
         \ Clean up stack and exit
         a_addr drop-implication-graph
@@ -465,12 +579,13 @@
     ELSE ( .. dl )  \ BCP terminated without conflict: Make a new decision.
       a_addr decide ( .. dl b )
       0= IF \ All variables are assigned: Satisfying assignment found.
-        \ TODO: enable to print one satisfying assignment
         a_addr print-assignment
         \ Clean up stack and exit
         a_addr drop-implication-graph
         true exit
       THEN
     THEN
+
+    iteration @ 1+ iteration !
   again
 ;

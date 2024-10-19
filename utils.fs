@@ -8,7 +8,7 @@ require main.fs
   { cn vn }
   cn create-clause-list { list }
   
-  here align vn 2 * 2 + cells allot { assignment }
+  vn 2 * 2 + cells allocate throw { assignment }
   assignment vn 1+ cells + { dl_lookup }
   
   \ initialize the assignent & dl lookup table

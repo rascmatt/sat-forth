@@ -4,8 +4,12 @@ require dimacs.fs
 : test ( 0 li .. ln 0 lj .. lm cn vn b -- )
   \ test the list of clauses and assert the expected result
   { expected }
-  prepare is-sat ( result )
+  prepare       ( a_addr l_addr )
+  2dup is-sat   ( a_addr l_addr result )
   dup expected <> IF ." Expected " expected . ." but was " . ELSE drop THEN
+
+  free-list     ( a_addr )
+  free throw    ( )
 ;
 
 s" ./dimacs/t1.cnf" parse-dimacs
@@ -17,7 +21,11 @@ true test
 s" ./dimacs/t3.cnf" parse-dimacs
 true test
 
-s" ./dimacs/t3.cnf" parse-dimacs
+s" ./dimacs/t4.cnf" parse-dimacs
 false test
 
+\ s" ./dimacs/uf20-0101.cnf" parse-dimacs
+\ true test
 
+\ s" ./dimacs/uf20-0999.cnf" parse-dimacs
+\ true test
