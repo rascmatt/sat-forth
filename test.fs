@@ -24,8 +24,11 @@ true test
 s" ./dimacs/t4.cnf" parse-dimacs
 false test
 
-\ s" ./dimacs/uf20-0101.cnf" parse-dimacs
-\ true test
+s" ./dimacs/uf20-01.cnf" parse-dimacs
+true test
 
-\ s" ./dimacs/uf20-0999.cnf" parse-dimacs
-\ true test
+s" ./dimacs/uf20-0101.cnf" parse-dimacs
+true test
+
+s" ./dimacs/uf20-0999.cnf" parse-dimacs
+true test

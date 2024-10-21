@@ -106,3 +106,29 @@
     cn @ vn @
 ;
 
+: lf ( -- )
+  10 emit
+;
+
+: dump-dimacs { a_addr l_addr -- }
+  \ Output the current clause set in DIMACS format to stdout
+  
+  a_addr @ { vn }
+  l_addr get-clause-list-length { cn }
+
+  \ Print the problem line
+  lf ." p cnf " vn . cn . 
+  lf
+
+  l_addr
+  begin              ( l_addr )
+      dup -1 > WHILE ( l_addr )
+          dup get-clause  ( l_addr li1 .. li2 n )
+          0 u+do
+            .
+          loop ( l_addr )
+          ." 0" lf
+          dup @ 1+ cells + @ ( l+1_addr )
+  repeat ( -1 )
+  drop
+;

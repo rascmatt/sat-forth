@@ -119,6 +119,31 @@
   loop ( s )
 ;
 
+: get-clause-list-length ( l_addr -- n )
+    0 swap \ Initialize counter
+    begin               ( i l_addr )
+        dup -1 > WHILE ( i l_addr )
+            dup @ 1+ cells + @
+            swap 1+ swap
+    repeat ( i -1 )
+    drop
+;
+
+: get-clause ( addr -- li1 .. lin n )
+  dup @ >r
+  r@ 0 u+do
+    dup i 1+ cells + @ swap
+  loop
+  drop r>
+;
+
+: print-clause ( c_addr -- )
+  get-clause  ( l1 .. ln n )
+  0 u+do
+    .
+  loop
+;
+
 : append-clause-set ( l_addr c_addr -- c_addr )
   \ Append a new clause c to the end of the list l if l does not
   \ yet contain an identical clause. Returns either the address of the added
@@ -139,24 +164,6 @@
   over -rot     ( c_addr c_addr l_addr )
   dup @ 1+ cells swap +  ( c_addr c_addr ln_addr )
   !             ( c_addr )
-;
-
-: get-clause-list-length ( l_addr -- n )
-    0 swap \ Initialize counter
-    begin               ( i l_addr )
-        dup -1 > WHILE ( i l_addr )
-            dup @ 1+ cells + @
-            swap 1+ swap
-    repeat ( i -1 )
-    drop
-;
-
-: get-clause ( addr -- li1 .. lin n )
-  dup @ >r
-  r@ 0 u+do
-    dup i 1+ cells + @ swap
-  loop
-  drop r>
 ;
 
 : lit-sign ( l -- n )
@@ -185,18 +192,34 @@
   drop 0
 ;
 
-: bcp-next ( a_addr l_addr -- c_addr status )
+: bcp-next { a_addr l_addr -- c_addr status }
     \ Find a clause c_addr under the current assignment a_addr given the clause list l_addr
     \ where the clause is either unssatisfied, indicating a conflict, or unit, indicating an
     \ implication
+
+    \ First, try to find an unsatisfied clause. BCP needs to stop immediately if a conflict is reached.
+    a_addr l_addr
     BEGIN
       dup -1 <> WHILE ( a_addr c_addr )
       2dup get-clause-status ( a_addr c_addr s )
-      dup dup 1 = swap 2 = or IF ( a_addr c_adr s )
+      dup 2 = IF ( a_addr c_adr s )
         rot drop exit ( c_addr s )
       THEN
       drop next-clause
-    REPEAT
+    REPEAT ( a_addr c_addr )
+    
+    drop l_addr ( a_addr l_addr )
+
+    \ Second, try to find a unit clause.
+    BEGIN
+      dup -1 <> WHILE ( a_addr c_addr )
+      2dup get-clause-status ( a_addr c_addr s )
+      dup 1 = IF ( a_addr c_adr s )
+        rot drop exit ( c_addr s )
+      THEN
+      drop next-clause
+    REPEAT ( a_addr c_addr )
+
     swap drop -1 \ Status -1 -> no next
 ;
 
@@ -560,12 +583,6 @@
   -1 -1 -1  \ Initialize the root of the implication graph
   0 ( dl ) \ Initialize the decision level with 0
   begin
-
-    \ Initiate restart after some iteractions without success
-    iteration @ 100 mod 0= IF
-      a_addr -1 backtrack
-      drop 0
-    THEN
 
     a_addr l_addr bcp  ( ..  dl b )
     0= IF
