@@ -272,15 +272,17 @@
   \ Make a new decision, adapt the current assignment accordingly and append the implication graph
   \ with a new decision level. 
   \ Returns true if a new assignment was made, otherwise false, i.e. there is already a complete assignment.
-  \ This implementation naively assigns the next free variable to a random truth value
+  \ This implementation finds the next free variable with the highest decision score, which is calculated
+  \ according to the VSIDS scheme. The assignment value is chosen randomly.
 
-  \ Randomize the choice of the sign
+  \ Randomize the choice of the assigned sign
   utime drop 2 mod { sign }
 
   \ Randomize the choice of the free variable to assign:
   \ (0) Run through variables and push all free variables on stack
-  \ (1) Pick a random one to assign
-  \ (2) Pop the list of variables from the stack and only assign the chosen one
+  \ (1) Run through the free variables by popping them from the stack 
+  \     and remember the one with the highest decision score
+  \ (2) Assign the variable with the highest score with the chosen sign
   
   0                ( f_n ) 
   a_addr @ 0 u+do  ( f_n )
@@ -296,17 +298,26 @@
 
   ( a1 .. an n )
 
-  \ Pick a random index in [0; n)
-  dup utime drop swap mod { idx }
-  
-  \ Prepare a variable to store the chosen literal
-  cell allocate throw { a }
+  a_addr @                      ( a_n )
+  a_addr swap 3 * 3 + cells +   { h_addr } \ Calculate the offset of the decision score table
+
+  ( a1 .. an n )
+
+  \ Prepare a variable to store the chosen literal (and initialize with 0)
+  cell allocate throw { a } 0 a !
 
   ( a1 .. an n )
   0 u+do ( a1 .. an )
-    idx i = IF  ( a_i )
-      a !       ( )
-    ELSE drop THEN
+    a @ 0= IF \ First variable
+      a ! ( a1 .. an-1 )
+    ELSE
+      h_addr a @ floats + f@    ( .. an | F: a_h ) \ Look up the score of the current best variable
+      dup h_addr swap floats +  ( .. an hn_addr | F: a_h )
+      f@                        ( .. an | F: a_h n_h )
+      f< IF \ Found a free variable with higher score
+        a !                     ( .. an-1 )
+      ELSE drop THEN            ( .. an-1 )
+    THEN
   loop  ( )
 
   a @                     ( a )
@@ -539,6 +550,55 @@
   swap drop
 ;
 
+: initialize-decision-score { a_addr l_addr -- }
+  \ Initialize the decision score for variables.
+  \ > The current implementation initializes all scores with 1.
+  \ > l_addr is unused for now, however in the future we might want to calculate the initial score
+  \ > based on the input clause set
+
+  \ TODO: initialize according to the DLIS scheme
+
+  a_addr @ { n } 
+  a_addr n 3 * 3 + cells     ( addr h_offs )
+  +                          { h_addr }  \ Calculate the offset of the decision score table
+  n 0 u+do  ( )
+    1e h_addr i 1+ floats + f!
+  loop
+;
+
+: bump-decision-score { a_addr c_addr -- }
+  \ Bump the decision score for variables occuring in the clause c
+  \ > The current implementation bumps all scores by 1
+  
+  a_addr @ { n } 
+  a_addr n 3 * 3 + cells     ( addr h_offs )
+  +                          { h_addr }  \ Calculate the offset of the decision score table
+
+  c_addr get-clause  ( li1 .. ln n )
+  0 u+do             ( li1 .. ln )
+    abs h_addr swap floats + ( .. lin-1 hn_addr )
+    dup f@           ( .. lin-1 hn_addr | F: h )
+    1e f+            ( .. lin-1 hn_addr | F: h+1 )
+    f!               ( li1 .. lin-1 )
+  loop ( )
+;
+
+: decay-decision-score { a_addr -- }
+  \ Decay the decision score of variables
+  \ > The current implementation decays all scores by 50%
+
+  a_addr @ { n } 
+  a_addr n 3 * 3 + cells     ( addr h_offs )
+  +                          { h_addr }  \ Calculate the offset of the decision score table
+
+  n 0 u+do  ( )
+    h_addr i 1+ floats +  ( hn_addr )
+    dup f@                ( hn_addr | F: h )
+    .5e f*                ( hn_addr | F: h/2 )
+    f!                    ( )
+  loop
+;
+
 : resolve-conflict { dl a_addr l_addr -- .. dl }
   \ Resolve the conflict by learning a clause and backtracking to the right level
   a_addr l_addr bcp-next ( .. c_addr s )
@@ -561,6 +621,12 @@
       third -rot            ( c_addr c_addr cl li )
 
       resolve               ( c_addr r_addr )
+      
+      dup @ 0= IF   \ Resolved the empty clause: Unsat
+        drop drop
+        is_new free throw
+        -1 exit
+      THEN
 
       \ If the current c_addr is an intermediary result, we need to free it
       swap                  ( r_addr c_addr )
@@ -568,6 +634,10 @@
       true is_new !         ( r_addr )
 
   repeat ( c_addr )
+
+  \ Bump the decision score for the conflict clause
+  dup a_addr swap     ( c_addr a_addr c_addr)
+  bump-decision-score ( c_addr )
 
   \ free the is_new variable
   is_new free throw
@@ -599,6 +669,14 @@
   \ Checks whether clause set given by l_addr is satisfiable. If so, a_addr contains the model
 
   align here cell allot { iteration } 0 iteration !
+  align here cell allot { conflict } 0 conflict !
+
+  \ Initialize variable scores for the decision heuristics
+  a_addr l_addr initialize-decision-score
+
+  a_addr @ { n } 
+  a_addr n 3 * 3 + cells     ( addr h_offs )
+  +                          { h_addr } 
 
   -1 -1 -1  \ Initialize the root of the implication graph
   0 ( dl ) \ Initialize the decision level with 0
@@ -607,6 +685,15 @@
     a_addr l_addr bcp  ( ..  dl b )
 
     0= IF
+
+      \ Increase the conflict count
+      conflict @ 1+ conflict !
+
+      \ Decay after every 100th conflict by 50%
+      conflict @ 100 mod 0= IF
+        a_addr decay-decision-score
+      THEN
+
       a_addr l_addr resolve-conflict ( .. dl )
 
       dup -1 = IF \ Backtracked to dl -1: Formula is unsatisfiable
