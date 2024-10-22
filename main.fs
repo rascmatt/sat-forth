@@ -324,22 +324,18 @@
 ;
 
 : drop-decision ( [ li dl c_addr ] a_addr -- )
-  \ Drop a decision node on the implication graph. This also
-  \ removes the assignment and deletes the decision level from
-  \ the lookup table
+  \ Drop a decision node on the implication graph. This also marks the decision
+  \ for removal in the table
 
   \ Decision level -1 indicates the implication graph root. Nothing
-  \ to delete from the lookup table.
+  \ to mark for deletion.
   third -1 = IF drop drop drop drop THEN
 
-  \ Remove the assignment
-  fourth abs cells    ( li dl c_addr a_addr a_offs )
-  over + -1 swap !    ( li dl c_addr a_addr )
-
-  \ Remove the dl from the lookup table
-  dup @ 1+ cells +    ( li dl c_addr dl_root )
-  fourth abs cells +  ( li dl c_addr dl_addr )
-  -1 swap !           ( li dl c_addr )
+  \ Mark for removal
+  dup @               ( li dl c_addr a_addr n )
+  2 * 2 + cells +     ( li dl c_addr m_offs )
+  fourth abs cells +  ( li dl c_addr ma_offs )
+  true swap !         ( li dl c_addr )
 
   \ Drop the implication graph element
   drop drop drop
@@ -358,7 +354,21 @@
       r>        ( t_d )
   repeat
   r>            ( t_d a_addr )
-  drop          ( t_d )
+
+  \ Remove the assignments & dl previously marked for deletion during conflict resolving
+  \ or backtracking
+  dup @                { a_addr n } ( t_d )
+  a_addr  n 1+ cells + { dl_addr  } ( t_d )
+  dl_addr n 1+ cells + { rm_addr  } ( t_d )
+
+  n 0 u+do       ( t_d )
+    i 1+ cells   ( t_d offs )
+    rm_addr over + @ IF
+      a_addr  over + -1 swap ! ( t_d offs ) \ Unassign the variable
+      dl_addr over + -1 swap ! ( t_d offs ) \ Remove the decision level
+      rm_addr + false swap !   ( t_d )      \ Unmark for removal
+    ELSE drop THEN
+  loop ( t_d )
 ;
 
 : drop-implication-graph ( i1 .. in dl a_addr -- )
@@ -512,9 +522,14 @@
     dup fourth > IF \ The new dl is bigger than the previous biggest
       -rot drop   ( li .. dl_n b )
     ELSE
-      dup third > IF \ The new dl is bigger than the previous second-biggest
-        swap drop ( li .. b dl_n )
-      ELSE drop   ( li .. b sb )
+      dup fourth <> IF
+        dup third > IF \ The new dl is bigger than the previous second-biggest but not equal to the biggest
+          swap drop ( li .. b dl_n )
+        ELSE 
+          drop  ( li .. b sb )
+        THEN
+      ELSE 
+        drop   ( li .. b sb )
       THEN
     THEN
   loop ( b sb )
@@ -532,15 +547,19 @@
   \ Initialize a boolean variable to indicate that we constructed a new clause, which can potentially be freed
   cell allocate throw { is_new } false is_new !
   
-  begin               ( c_addr )
-    dup dl a_addr rot ( c_addr dl a_addr c_addr )
-    is-asserting 0= while ( [ li dl cl ] c_addr )
+  begin                 ( c_addr )
+    \ Continue resolveing until either the clause becomes asserting, or there is not
+    \ further antecedent clause to walk back to
+    dup dl a_addr rot     ( c_addr dl a_addr c_addr )
+    is-asserting 0=       ( [ li dl cl ] c_addr b )
+    third -1 <> and while ( [ li dl cl ] c_addr )
       >r                    ( [ li dl cl ] | c_addr )
       third >r dup >r       ( [ li dl cl ] | c_addr li cl )
       a_addr drop-decision  ( | c_addr li cl )
       r> r> r>              ( cl li c_addr )
       -rot                  ( c_addr cl li )
       third -rot            ( c_addr c_addr cl li )
+
       resolve               ( c_addr r_addr )
 
       \ If the current c_addr is an intermediary result, we need to free it
@@ -558,6 +577,7 @@
 
   dl a_addr -rot      ( a_addr c_addr dl )
   get-backtrack-dl    ( new_dl )  
+
   dl a_addr rot       ( .. old_dl a_addr new_dl )
   backtrack           ( .. new_dl )
 ;
@@ -585,6 +605,7 @@
   begin
 
     a_addr l_addr bcp  ( ..  dl b )
+
     0= IF
       a_addr l_addr resolve-conflict ( .. dl )
 
@@ -594,7 +615,9 @@
         false exit
       THEN
     ELSE ( .. dl )  \ BCP terminated without conflict: Make a new decision.
+
       a_addr decide ( .. dl b )
+
       0= IF \ All variables are assigned: Satisfying assignment found.
         a_addr print-assignment
         \ Clean up stack and exit
