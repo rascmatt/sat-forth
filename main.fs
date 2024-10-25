@@ -273,10 +273,7 @@
   \ with a new decision level. 
   \ Returns true if a new assignment was made, otherwise false, i.e. there is already a complete assignment.
   \ This implementation finds the next free variable with the highest decision score, which is calculated
-  \ according to the VSIDS scheme. The assignment value is chosen randomly.
-
-  \ Randomize the choice of the assigned sign
-  utime drop 2 mod { sign }
+  \ according to the VSIDS scheme.
 
   \ Randomize the choice of the free variable to assign:
   \ (0) Run through variables and push all free variables on stack
@@ -298,8 +295,10 @@
 
   ( a1 .. an n )
 
-  a_addr @                      ( a_n )
-  a_addr swap 3 * 3 + cells +   { h_addr } \ Calculate the offset of the decision score table
+  a_addr @ { n } 
+  a_addr n 3 * 3 + cells     ( addr h1_offs )
+  +                          { h1_addr }  \ Calculate the offset of the decision score table for positive literals
+  h1_addr n 1+ cells +       { h2_addr }  \ Offset of the decision scores for negative literals
 
   ( a1 .. an n )
 
@@ -309,24 +308,37 @@
   ( a1 .. an n )
   0 u+do ( a1 .. an )
     a @ 0= IF \ First variable
+      dup  h1_addr swap cells + @ ( .. an h_p )
+      over h2_addr swap cells + @ ( .. an h_p h_n )
+      < IF negate THEN            ( .. li_n ) \ If the score of the negative literal is higher, use it
       a ! ( a1 .. an-1 )
     ELSE
-      h_addr a @ floats + f@    ( .. an | F: a_h ) \ Look up the score of the current best variable
-      dup h_addr swap floats +  ( .. an hn_addr | F: a_h )
-      f@                        ( .. an | F: a_h n_h )
-      f< IF \ Found a free variable with higher score
-        a !                     ( .. an-1 )
+      \ Look up the score of the current variable
+      dup  h1_addr swap cells + @ ( .. an h_p )
+      over h2_addr swap cells + @ ( .. an h_p h_n )
+      2dup < IF swap THEN drop    ( .. an h ) \ Use the bigger score for comparison
+      
+      \ Look up the score of the current best variable
+      a @ dup 0< IF h2_addr ELSE h1_addr THEN  ( .. an h li h_addr )
+      swap abs cells + @        ( .. an h a_h )
+      
+      \ Compare the current score with the current best
+      > IF
+        \ Depending on the score, use the sign of the literal
+        dup  h1_addr swap cells + @ ( .. an h_p )
+        over h2_addr swap cells + @ ( .. an h_p h_n )
+        < IF negate THEN            ( .. li_n )
+        a !                         ( .. an-1 )
       ELSE drop THEN            ( .. an-1 )
     THEN
   loop  ( )
 
-  a @                     ( a )
-  dup cells a_addr +      ( a addr )
-  sign swap !             ( a ) \ Assign the new value
-  a_addr dup @ 1+ cells + ( a dl_addr )
-  over cells +            ( a ld_a_addr)
-  dl 1+ swap !            ( a ) \ Put the decision level to the lookup table
-  sign 0= IF negate THEN  ( li )
+  a @                     ( li )
+  dup abs cells a_addr +  ( a addr )
+  over lit-sign swap !    ( li ) \ Assign the new value
+  a_addr dup @ 1+ cells + ( li dl_addr )
+  over abs cells +        ( li ld_a_addr)
+  dl 1+ swap !            ( li ) \ Store the decision level to the lookup table
   dl 1+ -1                ( li dl -1 ) \ Grow the implication graph
 
   a free throw            \ Free the variable
@@ -559,27 +571,32 @@
   \ TODO: initialize according to the DLIS scheme
 
   a_addr @ { n } 
-  a_addr n 3 * 3 + cells     ( addr h_offs )
-  +                          { h_addr }  \ Calculate the offset of the decision score table
+  a_addr n 3 * 3 + cells     ( addr h1_offs )
+  +                          { h1_addr }  \ Calculate the offset of the decision score table for positive literals
+  h1_addr n 1+ cells +       { h2_addr }  \ Offset of the decision scores for negative literals
+
   n 0 u+do  ( )
-    1e h_addr i 1+ floats + f!
+    0 h1_addr i 1+ cells + !
+    0 h2_addr i 1+ cells + !
   loop
 ;
 
 : bump-decision-score { a_addr c_addr -- }
   \ Bump the decision score for variables occuring in the clause c
   \ > The current implementation bumps all scores by 1
-  
+
   a_addr @ { n } 
-  a_addr n 3 * 3 + cells     ( addr h_offs )
-  +                          { h_addr }  \ Calculate the offset of the decision score table
+  a_addr n 3 * 3 + cells     ( addr h1_offs )
+  +                          { h1_addr }  \ Calculate the offset of the decision score table for positive literals
+  h1_addr n 1+ cells +       { h2_addr }  \ Offset of the decision scores for negative literals
 
   c_addr get-clause  ( li1 .. ln n )
   0 u+do             ( li1 .. ln )
-    abs h_addr swap floats + ( .. lin-1 hn_addr )
-    dup f@           ( .. lin-1 hn_addr | F: h )
-    1e f+            ( .. lin-1 hn_addr | F: h+1 )
-    f!               ( li1 .. lin-1 )
+    dup 0< IF h2_addr ELSE h1_addr THEN ( .. ln hx_addr )
+    swap abs cells + ( .. lin-1 hn_addr )
+    dup @            ( .. lin-1 hn_addr h )
+    1 +              ( .. lin-1 hn_addr h+1 )
+    swap !           ( li1 .. lin-1 )
   loop ( )
 ;
 
@@ -588,14 +605,34 @@
   \ > The current implementation decays all scores by 50%
 
   a_addr @ { n } 
-  a_addr n 3 * 3 + cells     ( addr h_offs )
-  +                          { h_addr }  \ Calculate the offset of the decision score table
+  a_addr n 3 * 3 + cells     ( addr h1_offs )
+  +                          { h1_addr }  \ Calculate the offset of the decision score table for positive literals
+  h1_addr n 1+ cells +       { h2_addr }  \ Offset of the decision scores for negative literals
 
   n 0 u+do  ( )
-    h_addr i 1+ floats +  ( hn_addr )
-    dup f@                ( hn_addr | F: h )
-    .5e f*                ( hn_addr | F: h/2 )
-    f!                    ( )
+    \ Decay positive literal scores
+    h1_addr i 1+ cells +  ( hn_addr )
+    dup @ 2 /             ( hn_addr h/2 )
+    swap !                ( )
+    \ Decay negative literal scores
+    h2_addr i 1+ cells +  ( hn_addr )
+    dup @ 2 /             ( hn_addr h/2 )
+    swap !                ( )
+  loop
+;
+
+: print-decision-scores { a_addr -- }
+  \ Print the decision scores
+
+  a_addr @ { n } 
+  a_addr n 3 * 3 + cells     ( addr h1_offs )
+  +                          { h1_addr }  \ Calculate the offset of the decision score table for positive literals
+  h1_addr n 1+ cells +       { h2_addr }  \ Offset of the decision scores for negative literals
+
+  n 0 u+do  ( )
+    i 1+ . ." ("
+    h1_addr i 1+ cells + @ . ." /"
+    h2_addr i 1+ cells + @ . ." ), "
   loop
 ;
 
@@ -607,6 +644,8 @@
   \ Initialize a boolean variable to indicate that we constructed a new clause, which can potentially be freed
   cell allocate throw { is_new } false is_new !
   
+  10 emit ." Resolving:"
+
   begin                 ( c_addr )
     \ Continue resolveing until either the clause becomes asserting, or there is not
     \ further antecedent clause to walk back to
@@ -620,7 +659,11 @@
       -rot                  ( c_addr cl li )
       third -rot            ( c_addr c_addr cl li )
 
+      10 emit third print-clause ." | " over print-clause ." | " dup .
+
       resolve               ( c_addr r_addr )
+
+      ." >> " dup print-clause
       
       dup @ 0= IF   \ Resolved the empty clause: Unsat
         drop drop
@@ -682,7 +725,13 @@
   0 ( dl ) \ Initialize the decision level with 0
   begin
 
+    10 emit ." >bcp< "
+    10 emit a_addr print-assignment
+
     a_addr l_addr bcp  ( ..  dl b )
+
+    10 emit ." <bcp> "
+    10 emit a_addr print-assignment
 
     0= IF
 
@@ -696,6 +745,9 @@
 
       a_addr l_addr resolve-conflict ( .. dl )
 
+      10 emit ." Scores: "
+      a_addr print-decision-scores
+
       dup -1 = IF \ Backtracked to dl -1: Formula is unsatisfiable
         \ Clean up stack and exit
         a_addr drop-implication-graph
@@ -703,7 +755,12 @@
       THEN
     ELSE ( .. dl )  \ BCP terminated without conflict: Make a new decision.
 
+      10 emit ." Scores: "
+      a_addr print-decision-scores
+
       a_addr decide ( .. dl b )
+
+      10 emit ." decide " 4 pick . '@' emit over .
 
       0= IF \ All variables are assigned: Satisfying assignment found.
         a_addr print-assignment
@@ -714,5 +771,7 @@
     THEN
 
     iteration @ 1+ iteration !
+
+    key drop
   again
 ;

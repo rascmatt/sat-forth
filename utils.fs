@@ -12,7 +12,7 @@ require main.fs
   vn 1+ cells    \ Space required for the assignment table
   vn 1+ cells +  \ Space required for the decision-level lookup table
   vn 1+ cells +  \ Space required for the removal marker table
-  vn 1+ floats + \ Space required for the decision heuristic score table (VSIDS)
+  vn 2 * 2 + cells +  \ Space required for the decision heuristic score table (VSIDS) (a cell for the negative and one for the positive literal)
 
   allocate throw { assignment }             \ Table to store (partial) assignments
   assignment vn 1+ cells + { dl_lookup }    \ Table to store the dl at which a variable was assigned
@@ -24,13 +24,15 @@ require main.fs
   vn assignment !
   vn dl_lookup  !
   vn dl_marker  !
-  vn s>f vsids_score f!
+  vn vsids_score !
+  vn vsids_score vn 1+ cells + !
 
   vn 0 u+do
     -1 assignment i 1+ cells + !
     -1 dl_lookup  i 1+ cells + !
     false dl_marker i 1+ cells + !
-    0e  vsids_score i 1+ floats + f!
+    0  vsids_score i 1+ cells + !
+    0  vsids_score vn 1+ i 1+ + cells + !
   loop
 
   assignment list
