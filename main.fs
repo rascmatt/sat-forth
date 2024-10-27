@@ -275,63 +275,81 @@
   \ This implementation finds the next free variable with the highest decision score, which is calculated
   \ according to the VSIDS scheme.
 
-  \ Randomize the choice of the free variable to assign:
-  \ (0) Run through variables and push all free variables on stack
-  \ (1) Run through the free variables by popping them from the stack 
-  \     and remember the one with the highest decision score
-  \ (2) Assign the variable with the highest score with the chosen sign
-  
-  0                ( f_n ) 
-  a_addr @ 0 u+do  ( f_n )
-    i 1+           ( f_n a )
-    dup cells a_addr + @ 0< IF ( f_n a )
-      swap 1+                  ( a f_n )
-    ELSE drop THEN             ( f_n )
-  loop ( a1 .. an n )
-
-  dup 0<= IF \ No more free variables
-    drop dl false exit
-  THEN
-
-  ( a1 .. an n )
+  \ Choose the free variable with the highest decision score. Break ties by randomly choosing one:
+  \ (0) Run through variables and push all free variables on stack and determine the
+  \     highest decision score
+  \ (1) Remove the variables by popping them from the stack if the decision score is
+  \     not the highest one
+  \ (2) Pick one of the remaining literals randomly and choose it
 
   a_addr @ { n } 
   a_addr n 3 * 3 + cells     ( addr h1_offs )
   +                          { h1_addr }  \ Calculate the offset of the decision score table for positive literals
   h1_addr n 1+ cells +       { h2_addr }  \ Offset of the decision scores for negative literals
+  
+  cell allocate throw { high_score } -1 high_score !
+  cell allocate throw { count } 0 count ! \ Count the number of literals with the high score
 
-  ( a1 .. an n )
+  0                ( f_n ) 
+  a_addr @ 0 u+do  ( f_n )
+    i 1+           ( f_n a )
+    dup cells a_addr + @ 0< IF ( f_n a )
+      \ Fetch the best score (pos/neg) of the current variable
+      dup  h1_addr swap cells + @ ( f_n a h_p )
+      over h2_addr swap cells + @ ( f_n a h_p h_n )
+
+      \ Convert variable to a literal depending on the higher score
+      2dup < IF
+       rot negate -rot swap
+      THEN drop    ( f_n li_a h_a )
+
+      \ Remember the current score, if it's the best so far
+      dup high_score @      ( f_n li_a h_a h_a h_b )
+      2dup > IF             ( f_n li_a h_a h_a h_b )
+        drop drop           ( f_n li_a h_a )
+        high_score ! ( f_n li_a )
+        1 count !    ( f_n li_a ) \ Reset the counter
+      ELSE           ( f_n li_a h_a h_a h_b )
+        = IF         ( f_n li_a h_a )
+          count @ 1+ count !      \ Increase the counter
+        THEN ( f_n li_a h_a )
+        drop ( f_n li_a )       
+      THEN ( f_n li_a )
+
+      \ Keep the literal and increase the counter
+      swap 1+                  ( li_a f_n )
+    ELSE drop THEN             ( f_n )
+  loop ( li_1 .. li_n n )
+
+  dup 0<= IF \ No more free variables
+    high_score free throw
+    drop dl false exit
+  THEN
+
+  ( li_1 .. li_n n )
+
+  \ Pick an index in [0; count)
+  utime drop count @ mod { idx }
 
   \ Prepare a variable to store the chosen literal (and initialize with 0)
   cell allocate throw { a } 0 a !
 
-  ( a1 .. an n )
-  0 u+do ( a1 .. an )
-    a @ 0= IF \ First variable
-      dup  h1_addr swap cells + @ ( .. an h_p )
-      over h2_addr swap cells + @ ( .. an h_p h_n )
-      < IF negate THEN            ( .. li_n ) \ If the score of the negative literal is higher, use it
-      a ! ( a1 .. an-1 )
-    ELSE
-      \ Look up the score of the current variable
-      dup  h1_addr swap cells + @ ( .. an h_p )
-      over h2_addr swap cells + @ ( .. an h_p h_n )
-      2dup < IF swap THEN drop    ( .. an h ) \ Use the bigger score for comparison
-      
-      \ Look up the score of the current best variable
-      a @ dup 0< IF h2_addr ELSE h1_addr THEN  ( .. an h li h_addr )
-      swap abs cells + @        ( .. an h a_h )
-      
-      \ Compare the current score with the current best
-      > IF
-        \ Depending on the score, use the sign of the literal
-        dup  h1_addr swap cells + @ ( .. an h_p )
-        over h2_addr swap cells + @ ( .. an h_p h_n )
-        < IF negate THEN            ( .. li_n )
-        a !                         ( .. an-1 )
-      ELSE drop THEN            ( .. an-1 )
-    THEN
-  loop  ( )
+  ( li_1 .. li_n n )
+  0 swap \ Initialize idx
+  ( li_1 .. li_n i n )
+  0 u+do ( li_1 .. li_n i )
+    swap     ( li_1 .. i li_n )
+    dup 0< IF h2_addr ELSE h1_addr THEN ( .. i li_n h_addr )
+    over abs cells + @                  ( .. i li_n h_n )
+    high_score @ = IF                   ( .. i li_n )
+      over idx = IF ( .. i li_n )
+        dup a !
+      THEN ( .. i li_n )
+      drop 1+ ( .. i+1 )
+    ELSE drop THEN
+    ( .. i )
+  loop  ( i )
+  drop
 
   a @                     ( li )
   dup abs cells a_addr +  ( a addr )
@@ -341,7 +359,8 @@
   dl 1+ swap !            ( li ) \ Store the decision level to the lookup table
   dl 1+ -1                ( li dl -1 ) \ Grow the implication graph
 
-  a free throw            \ Free the variable
+  high_score free throw   \ Free the variables
+  a free throw         
 
   dl 1+ true              ( .. dl b )
 ;
@@ -690,6 +709,9 @@
 
   dl a_addr -rot      ( a_addr c_addr dl )
   get-backtrack-dl    ( new_dl )  
+
+  10 emit
+  ." Backtracking to DL " dup .
 
   dl a_addr rot       ( .. old_dl a_addr new_dl )
   backtrack           ( .. new_dl )
