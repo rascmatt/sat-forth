@@ -344,6 +344,10 @@
 : backtrack ( i1 .. in dl a_addr t_dl -- i1 .. ij t_dl )
   \ Backtrack to the specified target decision level
   
+  \ Remove any elements on the implication graph where the dl is greater
+  \ than the target dl (i.e. in case the elements have not been removed due to
+  \ the resolution algorithm)
+  
   rot drop  ( i1 .. in a_addr t_dl )
   swap >r   ( li dl c t_dl )
   begin     ( li dl c t_dl )

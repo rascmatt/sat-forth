@@ -12,23 +12,23 @@ require dimacs.fs
   free throw    ( )
 ;
 
-s" ./dimacs/t1.cnf" parse-dimacs
+s" ./dimacs/t1.cnf" dimacs
 true test
 
-s" ./dimacs/t2.cnf" parse-dimacs
+s" ./dimacs/t2.cnf" dimacs
 true test
 
-s" ./dimacs/t3.cnf" parse-dimacs
+s" ./dimacs/t3.cnf" dimacs
 true test
 
-s" ./dimacs/t4.cnf" parse-dimacs
+s" ./dimacs/t4.cnf" dimacs
 false test
 
-s" ./dimacs/uf20-01.cnf" parse-dimacs
+s" ./dimacs/uf20-01.cnf" dimacs
 true test
 
-s" ./dimacs/uf20-0101.cnf" parse-dimacs
+s" ./dimacs/uf20-0101.cnf" dimacs
 true test
 
-s" ./dimacs/uf20-0999.cnf" parse-dimacs
+s" ./dimacs/uf20-0999.cnf" dimacs
 true test
