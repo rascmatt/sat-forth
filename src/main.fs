@@ -1,5 +1,6 @@
 require clause.fs
 require resolution.fs
+require random.fs
 
 : bcp-next { a_addr l_addr -- c_addr status }
     \ Find a clause c_addr under the current assignment a_addr given the clause list l_addr
@@ -72,7 +73,7 @@ require resolution.fs
   \ This implementation naively assigns the next free variable to a random truth value
 
   \ Randomize the choice of the sign
-  utime drop 2 mod { sign }
+  2 random { sign }
 
   \ Randomize the choice of the free variable to assign:
   \ (0) Run through variables and push all free variables on stack
@@ -94,7 +95,7 @@ require resolution.fs
   ( a1 .. an n )
 
   \ Pick a random index in [0; n)
-  dup utime drop swap mod { idx }
+  dup random { idx }
   
   \ Prepare a variable to store the chosen literal
   cell allocate throw { a }
@@ -274,6 +275,8 @@ require resolution.fs
 
 : is-sat { a_addr l_addr -- b }
   \ Checks whether clause set given by l_addr is satisfiable. If so, a_addr contains the model
+
+  453428 seed! \ Set a seed for determinism of probabilistic decisions
 
   align here cell allot { iteration } 0 iteration !
 
