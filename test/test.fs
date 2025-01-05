@@ -1,5 +1,5 @@
-require utils.fs
-require dimacs.fs
+require ../src/utils.fs
+require ../src/dimacs.fs
 
 : test ( 0 li .. ln 0 lj .. lm cn vn b -- )
   \ test the list of clauses and assert the expected result
@@ -12,23 +12,23 @@ require dimacs.fs
   free throw    ( )
 ;
 
-s" ./dimacs/t1.cnf" dimacs
+s" ../dimacs/t1.cnf" dimacs
 true test
 
-s" ./dimacs/t2.cnf" dimacs
+s" ../dimacs/t2.cnf" dimacs
 true test
 
-s" ./dimacs/t3.cnf" dimacs
+s" ../dimacs/t3.cnf" dimacs
 true test
 
-s" ./dimacs/t4.cnf" dimacs
+s" ../dimacs/t4.cnf" dimacs
 false test
 
-s" ./dimacs/uf20-01.cnf" dimacs
+s" ../dimacs/uf20-01.cnf" dimacs
 true test
 
-s" ./dimacs/uf20-0101.cnf" dimacs
+s" ../dimacs/uf20-0101.cnf" dimacs
 true test
 
-s" ./dimacs/uf20-0999.cnf" dimacs
+s" ../dimacs/uf20-0999.cnf" dimacs
 true test
