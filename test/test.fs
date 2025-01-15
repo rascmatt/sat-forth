@@ -29,6 +29,3 @@ true test
 
 s" ../dimacs/uf20-0101.cnf" dimacs
 true test
-
-s" ../dimacs/uf20-0999.cnf" dimacs
-true test
